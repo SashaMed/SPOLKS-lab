@@ -10,6 +10,18 @@
             HandleInput();
         }
 
+        public static int CustomStringHashCode(string input)
+        {
+            const int seed = 23; // Просто какое-то число для начального значения
+            int hash = seed;
+
+            foreach (char c in input)
+            {
+                hash = hash * 31 + c; // Простая хеш-функция
+            }
+
+            return hash;
+        }
         static void HandleInput()
         {
             while (true)
@@ -24,12 +36,12 @@
                     {
                         if (splitedInput[0] == "server")
                         {
-                            Server server = new Server(splitedInput[1], int.Parse(splitedInput[2]));
+                            ServerUDP server = new ServerUDP(splitedInput[1], int.Parse(splitedInput[2]));
                             server.Start();
                         }
                         else if (splitedInput[0] == "client")
                         {
-                            Client client = new Client(splitedInput[1], int.Parse(splitedInput[2]), splitedInput[3], int.Parse(splitedInput[4]) );
+                            ClientUDP client = new ClientUDP(splitedInput[1], int.Parse(splitedInput[2]), splitedInput[3], int.Parse(splitedInput[4]) );
                             client.Start();
                         }
                     }
@@ -37,12 +49,12 @@
                     {
                         if (input == "server")
                         {
-                            Server server = new Server("127.0.0.1", 12346);
+                            ServerUDP server = new ServerUDP("127.0.0.1", 12346);
                             server.Start();
                         }
                         else if (input == "client")
                         {
-                            Client client = new Client("127.0.0.1", 12346);
+                            ClientUDP client = new ClientUDP("127.0.0.1", 12346);
                             client.Start();
                         }
                         else if (input == "exit")
