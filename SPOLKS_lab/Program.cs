@@ -36,12 +36,22 @@
                     {
                         if (splitedInput[0] == "server")
                         {
-                            ServerUDP server = new ServerUDP(splitedInput[1], int.Parse(splitedInput[2]));
+                            Server server = new Server(splitedInput[1], int.Parse(splitedInput[2]));
                             server.Start();
                         }
                         else if (splitedInput[0] == "client")
                         {
-                            ClientUDP client = new ClientUDP(splitedInput[1], int.Parse(splitedInput[2]), splitedInput[3], int.Parse(splitedInput[4]) );
+                            Client client = new Client(splitedInput[1], int.Parse(splitedInput[2]), splitedInput[3], int.Parse(splitedInput[4]) );
+                            client.Start();
+                        }
+                        else if (splitedInput[0] == "udp_server")
+                        {
+                            ServerUDP server = new ServerUDP(splitedInput[1], int.Parse(splitedInput[2]));
+                            server.Start();
+                        }
+                        else if (splitedInput[0] == "udp_client")
+                        {
+                            ClientUDP client = new ClientUDP(splitedInput[1], int.Parse(splitedInput[2]), splitedInput[3], int.Parse(splitedInput[4]));
                             client.Start();
                         }
                     }
