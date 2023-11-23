@@ -77,10 +77,10 @@ namespace SPOLKS_lab
             {
                 while (true)
                 {
-                    if (connectionClose)
-                    {
-                        break;
-                    }
+                    //if (connectionClose)
+                    //{
+                    //    break;
+                    //}
                     InputUpdate();
                 }
 

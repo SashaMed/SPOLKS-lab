@@ -19,4 +19,14 @@ namespace SPOLKS_lab
         public EndPoint endPoint;
 
     }
+
+
+    public class FileData
+    {
+        public string filename; 
+        public string mode;
+        public ulong index;
+        public FileStream fileStream;
+        public DateTime startTime;
+    }
 }

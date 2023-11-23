@@ -59,12 +59,12 @@
                     {
                         if (input == "server")
                         {
-                            ServerUDP server = new ServerUDP("127.0.0.1", 12346);
+                            var server = new ServerUDP("127.0.0.1", 12346);
                             server.Start();
                         }
                         else if (input == "client")
                         {
-                            ClientUDP client = new ClientUDP("127.0.0.1", 12346);
+                            var client = new ClientUDP("127.0.0.1", 12346);
                             client.Start();
                         }
                         else if (input == "exit")

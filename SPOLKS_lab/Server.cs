@@ -7,6 +7,7 @@ using System.Text;
 using System.Threading.Tasks;
 using System.Reflection;
 using System.IO;
+using System.Data;
 
 namespace SPOLKS_lab
 {
@@ -17,6 +18,9 @@ namespace SPOLKS_lab
         private List<Socket> clientSockets = new List<Socket>();
         private List<ClientData> unconnectedClientDatas = new List<ClientData>();
         private Dictionary<string, ClientData> clientsProgress;
+
+        private Dictionary<Socket, FileData> uploadFromClientIndices = new Dictionary<Socket, FileData>();
+        private Dictionary<Socket, FileData> downloadFromServerIndices = new Dictionary<Socket, FileData>();
 
 
         public Server(string ipAddress, int port)
@@ -29,34 +33,97 @@ namespace SPOLKS_lab
             clientsProgress = new Dictionary<string, ClientData>();
         }
 
+        //public void Start()
+        //{
+        //    try
+        //    {
+        //        serverSocket.Listen(10);
+        //        Console.WriteLine($"The tcp server is running on {serverLocalEndPoint.Address}:{serverLocalEndPoint.Port}. Waiting for connections...");
+
+        //        Thread commandThread = new Thread(HandleConsoleInput);
+        //        commandThread.Start();
+
+        //        while (true)
+        //        {
+        //            Socket clientSocket = serverSocket.Accept();
+        //            clientSockets.Add(clientSocket);
+        //            IPEndPoint clientEndPoint = clientSocket.RemoteEndPoint as IPEndPoint;
+        //            Console.WriteLine("Client connected. IP: {0}, Port: {1}", clientEndPoint.Address, clientEndPoint.Port);
+        //            Thread clientThread = new System.Threading.Thread(() =>
+        //            {
+        //                HandleClient(clientSocket);
+        //            });
+        //            clientThread.Start();
+        //        }
+        //    }
+        //    catch (SocketException e)
+        //    {
+        //        Console.WriteLine("--------------------------------------------");
+        //        Console.WriteLine("SocketException: " + e);
+        //        Console.WriteLine("--------------------------------------------");
+        //    }
+        //    finally
+        //    {
+        //        serverSocket.Close();
+        //    }
+        //}
+
+
+
         public void Start()
         {
             try
             {
                 serverSocket.Listen(10);
-                Console.WriteLine($"The server is running on {serverLocalEndPoint.Address}:{serverLocalEndPoint.Port}. Waiting for connections...");
-
-                Thread commandThread = new Thread(HandleConsoleInput);
-                commandThread.Start();
+                Console.WriteLine($"The tcp server is running on {serverLocalEndPoint.Address}:{serverLocalEndPoint.Port}. Waiting for connections...");
 
                 while (true)
                 {
-                    Socket clientSocket = serverSocket.Accept();
-                    clientSockets.Add(clientSocket);
-                    IPEndPoint clientEndPoint = clientSocket.RemoteEndPoint as IPEndPoint;
-                    Console.WriteLine("Client connected. IP: {0}, Port: {1}", clientEndPoint.Address, clientEndPoint.Port);
-                    CheckIfShouldFinishFileTrasfer(clientSocket);
-                    System.Threading.Thread clientThread = new System.Threading.Thread(() =>
+                    List<Socket> checkRead = new List<Socket> { serverSocket };
+                    checkRead.AddRange(clientSockets);
+                    List<Socket> checkWrite = new List<Socket>();
+                    checkWrite.AddRange(clientSockets);
+
+
+                    Socket.Select(checkRead, checkWrite, null, 10000);
+
+                    foreach (Socket socket in checkRead)
                     {
-                        HandleClient(clientSocket);
-                    });
-                    clientThread.Start();
+                        if (socket == serverSocket)
+                        {
+
+                            Socket clientSocket = serverSocket.Accept();
+                            clientSockets.Add(clientSocket);
+                            IPEndPoint clientEndPoint = clientSocket.RemoteEndPoint as IPEndPoint;
+                            Console.WriteLine("Client connected. IP: {0}, Port: {1}", clientEndPoint.Address, clientEndPoint.Port);
+                        }
+                        else
+                        {
+                            HandleRequest(socket);
+                        }
+                    }
+                    var filedata = new FileData();
+                    foreach (Socket socket in checkWrite)
+                    {
+                        if (downloadFromServerIndices.TryGetValue(socket, out filedata))
+                        {
+                            DownloadFromServer(socket, filedata);
+                            
+                        }
+                    }
+                    
                 }
             }
             catch (SocketException e)
             {
                 Console.WriteLine("--------------------------------------------");
-                Console.WriteLine("SocketException: " + e);
+                Console.WriteLine("SocketException at start: " + e);
+                Console.WriteLine("--------------------------------------------");
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine("--------------------------------------------");
+                Console.WriteLine("Exception at start: " + e);
                 Console.WriteLine("--------------------------------------------");
             }
             finally
@@ -65,79 +132,47 @@ namespace SPOLKS_lab
             }
         }
 
-
-        private void CheckIfShouldFinishFileTrasfer(Socket clientSocket)
-        {
-            var clientEndPoint = clientSocket.RemoteEndPoint as IPEndPoint;
-            var clientConnectionInfo = $"{clientEndPoint.Address.ToString()}:{clientEndPoint.Port}";
-            if (clientsProgress.TryGetValue(clientConnectionInfo, out var clientData))
-            {
-                Console.WriteLine($"The client {clientConnectionInfo} has connected again," +
-                    $" client has unfinished operation: {clientData.mode}");
-                if (clientData.mode == "download")
-                {
-                    DownloadFromServer(clientSocket, clientData.filename, clientData.index);
-                    Console.WriteLine($"Client {clientConnectionInfo} operation is finished: {clientData.mode}");
-                    clientsProgress.Remove(clientConnectionInfo);
-                }
-                else if (clientData.mode == "upload")
-                {
-                    SendRequestForUploadContinue(clientSocket, clientData.filename, clientData.index);
-                    Console.WriteLine($"Request for upload continue was sent the client {clientConnectionInfo}");
-                    clientsProgress.Remove(clientConnectionInfo);
-                }
-            }
-        }
-
-        private void SendRequestForUploadContinue(Socket clientSocket, string filename, long index)
-        {
-            try
-            {
-                var request = $"request_for_upload {filename} {index}";
-                byte[] response = Encoding.ASCII.GetBytes(request);
-                clientSocket.Send(response);
-            }
-            catch (SocketException e)
-            {
-                Console.WriteLine("--------------------------------------------");
-                Console.WriteLine("SocketException at Request for Upload: " + e);
-                Console.WriteLine("--------------------------------------------");
-            }
-
-        }
-
-        private void HandleClient(Socket clientSocket)
+        private void HandleRequest(Socket clientSocket)
         {
             byte[] buffer = new byte[Program.bufferSize];
             int bytesRead;
-
+            var filedata = new FileData();
             IPEndPoint clientEndPoint = clientSocket.RemoteEndPoint as IPEndPoint;
             try
             {
-                while ((bytesRead = clientSocket.Receive(buffer)) > 0)
+                if (uploadFromClientIndices.TryGetValue(clientSocket, out filedata))
                 {
-                    string data = Encoding.ASCII.GetString(buffer, 0, bytesRead);
-                    if (data.Trim().ToLower() == "close")
-                    {
-                        CloseConnectionWithClient(clientSocket);
-                        break; 
-                    }
-                    Console.WriteLine($"Received from {clientEndPoint.Address}:{clientEndPoint.Port}: {data}");
-                    var stringResponse = HandleCommand(clientSocket, data);
-                    Console.WriteLine($"Response: {stringResponse}");
-
-                    byte[] response = Encoding.ASCII.GetBytes(stringResponse);
-                    clientSocket.Send(response);
+                    DownloadFromClient(clientSocket, filedata);
+                    return;
                 }
+                //string data = Encoding.ASCII.GetString(buffer, 0, bytesRead);
+                string data = Read(clientSocket);
+                if (data == "error")
+                {
+                    return;
+                }
+                if (data.Trim().ToLower() == "close")
+                {
+                    CloseConnectionWithClient(clientSocket);
+                    return;
+                }
+                Console.WriteLine($"Received from {clientEndPoint.Address}:{clientEndPoint.Port}: {data}");
+                var stringResponse = HandleCommand(clientSocket, data);
+                if (stringResponse != "")
+                {
+                    Console.WriteLine($"Response: {stringResponse}");
+                    Send(clientSocket, stringResponse);
+                }
+
             }
-            catch(SocketException e)
+            catch (SocketException e)
             {
                 Console.WriteLine("--------------------------------------------");
                 Console.WriteLine("SocketException: " + e);
                 Console.WriteLine("--------------------------------------------");
             }
 
-            clientSocket.Close();
+            //clientSocket.Close();
         }
 
         private string HandleCommand(Socket clientSocket, string command)
@@ -162,27 +197,29 @@ namespace SPOLKS_lab
             } 
             else if (words[0] == "download" && words.Length > 1)
             {
-                DownloadFromServer(clientSocket, words[1]);
-                result = "download complete";
+                StartDownloadFromServer(clientSocket, words[1]);
+                result = "";
             }
-            else if (words[0] == "start_file_transfer" && words.Length > 1)
+            else if (words[0] == "upload" && words.Length > 1)
             {
-                var index = ulong.Parse(words[2]);
-                DownloadFromClient(clientSocket, words[1], index);
-                result = "file uploaded from client";
+                //var index = ulong.Parse(words[2]);
+                StartDownloadFromClient(clientSocket, words[1]);
+                result = "";
             }
 
             return result;
         }
 
-
-        private void DownloadFromClient(Socket clientSocket, string filePath, ulong fileOffset = 0)
+        public void StartDownloadFromClient(Socket clientSocket, string filePath)
         {
             string fileName = Path.GetFileName(filePath);
-            var startTime = DateTime.Now;
             FileStream fs = null;
             IPEndPoint clientEndPoint = clientSocket.RemoteEndPoint as IPEndPoint;
             int index = 0;
+            ulong fileOffset = (ulong)CheckIfShouldContinueDownloadFromClient(clientSocket, filePath);
+            var startMessage = "start_file_transfer " + filePath + " " + fileOffset;
+            Console.WriteLine($"Sent: {startMessage}");
+            Send(clientSocket, startMessage);
             Console.WriteLine($"Starting to receive {fileName} from the server");
             FileMode filemode = FileMode.Create;
             if (fileOffset > 0)
@@ -191,32 +228,51 @@ namespace SPOLKS_lab
                 Console.WriteLine($"File already exist, continue downloading from client");
             }
 
+            var startTime = DateTime.Now;
+            fs = new FileStream($"{fileName}", filemode, FileAccess.Write);
+            var fileData = new FileData();
+            fileData.index = fileOffset;
+            fileData.fileStream = fs;
+            fileData.startTime = startTime;
+            fileData.filename= fileName;
+            uploadFromClientIndices.Add(clientSocket, fileData);
+            DownloadFromClient(clientSocket, fileData);
+
+        }
+
+        private void DownloadFromClient(Socket clientSocket, FileData fileData)
+        {
+            IPEndPoint clientEndPoint = clientSocket.RemoteEndPoint as IPEndPoint;
+
             try
             {
-                fs = new FileStream($"{fileName}", filemode, FileAccess.Write);
-                if (fileOffset != 0)
+                if (fileData.index != 0)
                 {
-                    fs.Seek((long)fileOffset, SeekOrigin.Begin);
+                    fileData.fileStream.Seek((long)fileData.index, SeekOrigin.Begin);
                 }
 
                 byte[] buffer = new byte[Program.bufferSize];
                 int bytesRead;
-                while ((bytesRead = clientSocket.Receive(buffer)) > 0)
+                bytesRead = clientSocket.Receive(buffer);
+                fileData.index += (ulong)Program.bufferSize;
+                string response = Encoding.ASCII.GetString(buffer, 0, bytesRead);
+                if (response.Contains("end_file_transfer"))
                 {
-                    index += Program.bufferSize;
-                    string response = Encoding.ASCII.GetString(buffer, 0, bytesRead);
-                    if (response.Contains("end_file_transfer"))
+                    var endTime = DateTime.Now;
+                    var deltaTime = endTime - fileData.startTime;
+                    var bitrate = fileData.index / (ulong)deltaTime.Seconds;
+                    Console.WriteLine($"File transfer completed. Bitrate: {bitrate / 1024} kb/s.");
+                    if (fileData.fileStream != null)
                     {
-                        var endTime = DateTime.Now;
-                        var deltaTime = endTime - startTime;
-                        var bitrate = index / deltaTime.Seconds;
-                        Console.WriteLine($"File transfer completed. Bitrate: {bitrate / 1024} kb/s.");
-                        break;
+                        fileData.fileStream.Close();
                     }
+                    uploadFromClientIndices.Remove(clientSocket);
+                    return;
 
-
-                    fs.Write(buffer, 0, bytesRead);
                 }
+                fileData.fileStream.Write(buffer, 0, bytesRead);
+                uploadFromClientIndices[clientSocket] = fileData;
+                return;
 
             }
             catch (SocketException e)
@@ -226,8 +282,9 @@ namespace SPOLKS_lab
                 client.mode = "upload";
                 client.port = clientEndPoint.Port;
                 client.ipAddres = clientEndPoint.Address.ToString();
-                client.index = index;
-                client.filename = filePath;
+                client.index = (long)fileData.index;
+                client.filename = fileData.filename;
+                uploadFromClientIndices.Remove(clientSocket);
                 clientsProgress.TryAdd($"{clientEndPoint.Address.ToString()}:{clientEndPoint.Port}", client);
                 unconnectedClientDatas.Add(client);
                 Console.WriteLine("--------------------------------------------");
@@ -239,56 +296,118 @@ namespace SPOLKS_lab
                 Console.WriteLine("--------------------------------------------");
                 Console.WriteLine("An error occurred: " + e.ToString());
                 Console.WriteLine("--------------------------------------------");
-            }
-            finally
-            {
-                if (fs != null)
+                if (fileData.fileStream != null)
                 {
-                    fs.Close();
+                    fileData.fileStream.Close();
                 }
             }
+            //finally
+            //{
+            //    if (fileData.fileStream != null)
+            //    {
+            //        fileData.fileStream.Close();
+            //    }
+            //}
         }
-        
 
-        private void DownloadFromServer(Socket clientSocket, string fileName, long filePosition = 0)
+        private string Read(Socket clientSocket)
         {
-            IPEndPoint clientEndPoint = clientSocket.RemoteEndPoint as IPEndPoint;
-            long index = 0;
-            if (!File.Exists(fileName))
-            {
-                string message = "File does not exist";
-                byte[] errorMsg = Encoding.ASCII.GetBytes(message);
-                clientSocket.Send(errorMsg);
-                Console.WriteLine($"Client requested a file that does not exist: {fileName}");
-                return;
-            }
             try
             {
-                Console.WriteLine($"Sending {fileName} file to the client.");
-                Console.WriteLine($"start_file_transfer {fileName} {filePosition}");
-                byte[] startMsg = Encoding.ASCII.GetBytes($"start_file_transfer {fileName} {filePosition}");
-                clientSocket.Send(startMsg);
+                byte[] buffer = new byte[Program.bufferSize];
+                int bytesRead;
+                bytesRead = clientSocket.Receive(buffer);
+                var response = Encoding.ASCII.GetString(buffer, 0, bytesRead);
+                return response;
+            }
+            catch (Exception e)
+            {
+                clientSocket.Close();
+                Console.WriteLine("SocketException in Read: " + e);
+                Console.WriteLine("--------------------------------------------");
+                return "error";
+            }
+        }
 
-                using (FileStream fs = new FileStream(fileName, FileMode.Open, FileAccess.Read))
+
+        private void Send(Socket clientSocket, string message)
+        {
+            try
+            {
+                byte[] data = Encoding.ASCII.GetBytes(message);
+                clientSocket.Send(data);
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine("--------------------------------------------");
+                Console.WriteLine("SocketException in Send: " + e);
+                Console.WriteLine("--------------------------------------------");
+            }
+        }
+
+        private void StartDownloadFromServer(Socket clientSocket, string fileName)
+        {
+            try
+            {
+                IPEndPoint clientEndPoint = clientSocket.RemoteEndPoint as IPEndPoint;
+                long index = 0;
+                if (!File.Exists(fileName))
                 {
-                    fs.Seek(filePosition, SeekOrigin.Begin);
-                    byte[] buffer = new byte[Program.bufferSize];
-                    int bytesRead;
-
-
-                    while ((bytesRead = fs.Read(buffer, 0, buffer.Length)) > 0)
-                    {
-                        index += Program.bufferSize;
-                        clientSocket.Send(buffer, 0, bytesRead, SocketFlags.None);
-                    }
+                    string message = "File does not exist";
+                    byte[] errorMsg = Encoding.ASCII.GetBytes(message);
+                    clientSocket.Send(errorMsg);
+                    Console.WriteLine($"Client requested a file that does not exist: {fileName}");
+                    return;
                 }
 
-                Thread.Sleep(1000);
+                long filePosition = CheckIfShouldContinueDownloadFromServer(clientSocket, fileName);
+                var downloadMsg = $"start_file_transfer {fileName} {filePosition}";
+                Console.WriteLine(downloadMsg);
+                Send(clientSocket, downloadMsg);
+                Console.WriteLine($"Sending {fileName} file to the client.");
 
-                byte[] endMsg = Encoding.ASCII.GetBytes("end_file_transfer");
-                clientSocket.Send(endMsg);
+                var startTime = DateTime.Now;
+                FileStream fs = new FileStream(fileName, FileMode.Open, FileAccess.Read);
+                var fileData = new FileData();
+                fileData.index = (ulong)filePosition;
+                fileData.fileStream = fs;
+                fileData.startTime = startTime;
+                fileData.filename = fileName;
+                downloadFromServerIndices.Add(clientSocket, fileData);
+                DownloadFromServer(clientSocket, fileData);
+            }
+            catch(Exception ex)
+            {
+                Console.WriteLine("--------------------------------------------");
+                Console.WriteLine("An error occurred at StartDownloadFromServer: " + ex.ToString());
+                Console.WriteLine("--------------------------------------------");
+            }
+        }
 
-                Console.WriteLine($"File {fileName} has been sent to the client.");
+        private void DownloadFromServer(Socket clientSocket, FileData fileData)
+        {
+            IPEndPoint clientEndPoint = clientSocket.RemoteEndPoint as IPEndPoint;
+            try
+            {
+                fileData.fileStream.Seek((long)fileData.index, SeekOrigin.Begin);
+                byte[] buffer = new byte[Program.bufferSize];
+                int bytesRead;
+                bytesRead = fileData.fileStream.Read(buffer, 0, buffer.Length);
+                fileData.index += (ulong)Program.bufferSize;
+                clientSocket.Send(buffer, 0, bytesRead, SocketFlags.None);
+                downloadFromServerIndices[clientSocket] = fileData;
+                if (bytesRead < Program.bufferSize)
+                {
+                    byte[] endMsg = Encoding.ASCII.GetBytes("end_file_transfer");
+                    clientSocket.Send(endMsg);
+                    Console.WriteLine($"File {fileData.filename} has been sent to the client.");
+                    if (fileData.fileStream != null)
+                    {
+                        fileData.fileStream.Close();
+                    }
+                    downloadFromServerIndices.Remove(clientSocket);
+                    return;
+                }
 
             }
             catch (Exception e)
@@ -298,10 +417,15 @@ namespace SPOLKS_lab
                 client.mode = "download";
                 client.port = clientEndPoint.Port;
                 client.ipAddres = clientEndPoint.Address.ToString();
-                client.index = index;
-                client.filename = fileName;
+                client.index = (long)fileData.index;
+                client.filename = fileData.filename;
                 clientsProgress.TryAdd($"{clientEndPoint.Address.ToString()}:{clientEndPoint.Port}", client);
                 unconnectedClientDatas.Add(client);
+                if (fileData.fileStream != null)
+                {
+                    fileData.fileStream.Close();
+                }
+                downloadFromServerIndices.Remove(clientSocket);
                 Console.WriteLine("--------------------------------------------");
                 Console.WriteLine("An error occurred while sending the file: " + e.ToString());
                 Console.WriteLine("--------------------------------------------");
@@ -331,6 +455,51 @@ namespace SPOLKS_lab
             Console.WriteLine($"Closing connection for {clientEndPoint.Address}:{clientEndPoint.Port}");
             byte[] closeMessage = Encoding.ASCII.GetBytes("closing connection");
             clientSocket.Send(closeMessage);
+        }
+
+
+        private long CheckIfShouldContinueDownloadFromServer(Socket clientSocket, string filename)
+        {
+            //
+            //var clientConnectionInfo = $"{clientEndPoint}";
+
+            var clientEndPoint = clientSocket.RemoteEndPoint as IPEndPoint;
+            var clientConnectionInfo = $"{clientEndPoint.Address.ToString()}:{clientEndPoint.Port}";
+            if (clientsProgress.TryGetValue(clientConnectionInfo, out var clientData))
+            {
+
+                if (clientData.mode == "download" && clientData.filename == filename)
+                {
+                    Console.WriteLine($"The client {clientConnectionInfo} has connected again," +
+    $" client has unfinished operation: {clientData.mode}");
+                    //DownloadFromServer(clientEndPoint, clientData.filename, clientData.index);
+                    Console.WriteLine($"ClientData.index: {clientData.index}");
+                    clientsProgress.Remove(clientConnectionInfo);
+                    return clientData.index;
+                }
+            }
+            return 0;
+        }
+
+
+        private long CheckIfShouldContinueDownloadFromClient(Socket clientSocket, string filename)
+        {
+            var clientEndPoint = clientSocket.RemoteEndPoint as IPEndPoint;
+            var clientConnectionInfo = $"{clientEndPoint.Address.ToString()}:{clientEndPoint.Port}";
+            if (clientsProgress.TryGetValue(clientConnectionInfo, out var clientData))
+            {
+
+                if (clientData.mode == "upload" && clientData.filename == filename)
+                {
+                    Console.WriteLine($"The client {clientConnectionInfo} has connected again," +
+    $" client has unfinished operation: {clientData.mode}");
+                    //DownloadFromServer(clientEndPoint, clientData.filename, clientData.index);
+                    Console.WriteLine($"ClientData.index: {clientData.index}");
+                    clientsProgress.Remove(clientConnectionInfo);
+                    return clientData.index;
+                }
+            }
+            return 0;
         }
     }
 }
